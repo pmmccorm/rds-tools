@@ -24,9 +24,23 @@
 #include <getopt.h>
 #include <byteswap.h>
 #include <sys/ioctl.h>
-#include "rds.h"
+
+#include <linux/rds.h>
 
 #include "pfhack.h"
+
+struct rds_asend_args {
+        u_int64_t       user_token;
+        u_int64_t       flags;
+};
+
+struct rds_reset {
+	u_int8_t        tos;
+	struct in_addr  src;
+	struct in_addr  dst;
+};
+
+#define RDS_CMSG_ASYNC_SEND             10
 
 /*
  *
@@ -655,9 +669,6 @@ static int rds_socket(struct options *opts, struct sockaddr_in *sin)
 
 	fcntl(fd, F_SETFL, O_NONBLOCK);
 
-	if (opts->tos && ioctl(fd, SIOCRDSSETTOS, &opts->tos)) 
-		die_errno("ERROR: failed to set TOS\n");
-
 	return fd;
 }
 
@@ -1102,11 +1113,11 @@ static void rdma_mark_completed(struct task *tasks, uint64_t token, int status, 
 		switch (status) {
 		case RDS_RDMA_REMOTE_ERROR:
 			errmsg = "remote error"; break;
-		case RDS_RDMA_SEND_DROPPED:
+		case RDS_RDMA_DROPPED:
 			errmsg = "operation was dropped"; break;
-		case RDS_RDMA_SEND_CANCELED:
+		case RDS_RDMA_CANCELED:
 			errmsg = "operation was cancelled"; break;
-		case RDS_RDMA_SEND_OTHER_ERROR:
+		case RDS_RDMA_OTHER_ERROR:
 			errmsg = "other error"; break;
 		default:
 			errmsg = "unknown error"; break;
@@ -1119,7 +1130,7 @@ static void rdma_mark_completed(struct task *tasks, uint64_t token, int status, 
 				errmsg);
 
 		if (hdr &&
-			(status == RDS_RDMA_SEND_DROPPED ||
+			(status == RDS_RDMA_DROPPED ||
 			 status == RDS_RDMA_REMOTE_ERROR)) {
 
 			if (hdr->seq == seq) {
@@ -1170,7 +1181,9 @@ static void rdma_put_cmsg(struct msghdr *msg, int type,
 	} else {
 		cmsg = (struct cmsghdr *)((char *)msg->msg_control + msg->msg_controllen);
 		msg->msg_controllen += CMSG_SPACE(size);
-	}cmsg->cmsg_level = sol;
+	}
+
+	cmsg->cmsg_level = sol;
 	cmsg->cmsg_type = type;
 	cmsg->cmsg_len = CMSG_LEN(size);
 	memcpy(CMSG_DATA(cmsg), ptr, size);
@@ -1253,9 +1266,9 @@ static void rdma_build_cmsg_xfer(struct msghdr *msg, const struct header *hdr,
 
 static void build_cmsg_async_send(struct msghdr *msg, uint64_t user_token)
 {
-	struct rds_asend_args  args;
+	struct rds_asend_args args = { 0 };
 
-	args.flags |= RDS_SEND_NOTIFY_ME;
+	args.flags |= RDS_RDMA_NOTIFY_ME;
 	args.user_token = user_token;
 	rdma_put_cmsg(msg, RDS_CMSG_ASYNC_SEND, &args, sizeof(args));
 }
@@ -1649,7 +1662,7 @@ static int recv_message(int fd,
 
 	/* See if the message comes with a RDMA destination */
 	for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
-		struct rds_rdma_send_notify notify;
+		struct rds_rdma_notify notify;
 
 		if (cmsg->cmsg_level != sol)
 			continue;
@@ -1675,7 +1688,7 @@ static int recv_message(int fd,
 			memcpy(cookie, CMSG_DATA(cmsg), sizeof(*cookie));
 			break;
 
-		case RDS_CMSG_RDMA_SEND_STATUS:
+		case RDS_CMSG_RDMA_STATUS:
 			if (cmsg->cmsg_len < CMSG_LEN(sizeof(notify)))
 				die("RDS_CMSG_RDMA_DEST data too small");
 			memcpy(&notify, CMSG_DATA(cmsg), sizeof(notify));
@@ -2699,7 +2712,7 @@ static void reset_conn(struct options *opts)
 	val.tos = opts->tos;
 	val.src.s_addr = htonl(opts->receive_addr);
 	val.dst.s_addr = htonl(opts->send_addr);
-	if (setsockopt(fd, sol, RDS_CONN_RESET, &val, sizeof(val)))
+	if (setsockopt(fd, sol, SO_RDS_TRANSPORT, &val, sizeof(val)))
 		die_errno("setsockopt RDS_CONN_RESET failed");
 }
 

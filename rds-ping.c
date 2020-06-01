@@ -49,7 +49,8 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <sys/ioctl.h>
-#include "rds.h"
+
+#include <linux/rds.h>
 
 #include "pfhack.h"
 
@@ -313,9 +314,6 @@ rds_socket(struct in_addr *src, struct in_addr *dst)
 
 	if (bind(fd, (struct sockaddr *) &sin, sizeof(sin)))
 		die_errno("bind() failed");
-
-	if (opt_tos && ioctl(fd, SIOCRDSSETTOS, &opt_tos)) 
-		die_errno("ERROR: failed to set TOS\n");
 
 	return fd;
 }

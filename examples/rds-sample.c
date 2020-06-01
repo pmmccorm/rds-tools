@@ -25,11 +25,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 
-/* FIXME - this is a hack to getaround RDS not exporting any header files.
- * This is a local copy of the file found at net/rds/
- */
-#include "rds.h"
+#include <linux/rds.h>
+
 /* These are defined in rds.h....but that file is not happily included */
 #ifndef SOL_RDS
 #define SOL_RDS		276
@@ -42,7 +41,7 @@
 
 
 #define TESTPORT	4000
-#define BUFSIZE		94
+#define BUFSIZE		1024
 
 #define NUM_PRINTABLE_CHARS	94
 #define PRINTABLE_CHARS_OFFSET	33
@@ -97,6 +96,8 @@ static void create_message(char *buf, uint32_t start)
 static int do_rdma_read(int sock, struct msghdr *msg, struct rdss_message *buf,
 			uint32_t remote_flags)
 {
+	struct cmsghdr *cmsg_hdr;
+	struct rds_rdma_notify notify;
 	struct rds_rdma_args *args;
 	struct rds_iovec iov;
 	struct cmsghdr *cmsg;
@@ -122,7 +123,7 @@ static int do_rdma_read(int sock, struct msghdr *msg, struct rdss_message *buf,
 	args->nr_local = 1;
 	args->flags = remote_flags ? (RDS_RDMA_READWRITE | RDS_RDMA_FENCE) : 0;
 	args->flags |= RDS_RDMA_NOTIFY_ME;
-	args->user_token = 0;
+	args->user_token = 0xABABABABABABAB;
 
 	msg->msg_controllen = CMSG_SPACE(sizeof(struct rds_rdma_args));
 
@@ -136,6 +137,14 @@ static int do_rdma_read(int sock, struct msghdr *msg, struct rdss_message *buf,
 	do {
 		rc = recvmsg(sock, msg, MSG_DONTWAIT);
 	} while (rc < 0 && errno == EAGAIN);
+
+	cmsg_hdr = CMSG_FIRSTHDR(msg);
+
+	assert(cmsg_hdr->cmsg_len == CMSG_LEN(sizeof(notify)));
+
+	memcpy(&notify, CMSG_DATA(cmsg_hdr), sizeof(notify));
+
+	printf("cmsg type=%d user_token=%lx status=%d\n", cmsg_hdr->cmsg_type, notify.user_token, notify.status);
 
 	return 0;
 }
@@ -418,7 +427,7 @@ int main(int argc, char **argv)
 {
 	char *serveraddr = NULL, *clientaddr = NULL;
 	uint32_t flags = 0;
-	int i, count = -1;
+	int i, count = 10;
 
 	if (argc < 3) {
 		printf("not enough args\n");
